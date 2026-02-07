@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.openclaw.things-bridge</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- UPDATE: path to your bun binary (run: which bun) -->
+        <string>/Users/YOUR_USERNAME/.bun/bin/bun</string>
+        <string>run</string>
+        <!-- UPDATE: path to things-bridge source -->
+        <string>/Users/YOUR_USERNAME/path/to/things-bridge/src/index.ts</string>
+    </array>
+
+    <!-- UPDATE: path to things-bridge directory -->
+    <key>WorkingDirectory</key>
+    <string>/Users/YOUR_USERNAME/path/to/things-bridge</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>THINGS_BRIDGE_PORT</key>
+        <string>18790</string>
+        <key>THINGS_BRIDGE_HOST</key>
+        <string>0.0.0.0</string>
+        <!-- UPDATE: generate with: openssl rand -base64 32 -->
+        <key>THINGS_BRIDGE_TOKEN</key>
+        <string>REPLACE_WITH_GENERATED_TOKEN</string>
+        <!-- UPDATE: ensure your bun path is included -->
+        <key>PATH</key>
+        <string>/Users/YOUR_USERNAME/.bun/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- UPDATE: path to log directory -->
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/path/to/things-bridge/logs/bridge.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/path/to/things-bridge/logs/bridge.error.log</string>
+</dict>
+</plist>

@@ -1,0 +1,16 @@
+{
+  "name": "things-bridge",
+  "version": "0.1.0",
+  "description": "HTTP bridge between OpenClaw (Raspberry Pi) and Things 3 (Mac)",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "check": "bun run --bun tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7"
+  }
+}

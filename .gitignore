@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Environment (contains secrets)
+.env
+
+# Build output
+dist/
+
+# Logs
+logs/
+
+# Bun
+bun.lockb
+
+# macOS
+.DS_Store
+
+# Personal deployment notes (contains tokens/IPs)
+DESIGN.md
