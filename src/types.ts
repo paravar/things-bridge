@@ -21,6 +21,7 @@ export interface Todo {
   reminderTime: string | null;
   repeating: boolean;
   recurrenceRule: string | null;
+  nextInstanceDate: string | null;
 }
 
 export interface ChecklistItem {

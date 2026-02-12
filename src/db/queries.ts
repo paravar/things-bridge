@@ -172,12 +172,70 @@ interface RawTaskRow {
   area: string | null;
   areaTitle: string | null;
   reminderTime: number | null;
-  rt1_recurrenceRule: string | null;
+  rt1_recurrenceRule: unknown;
   rt1_nextInstanceStartDate: number | null;
   rt1_instanceCreationPaused: number | null;
 }
 
+/** Map frequency unit integer from recurrenceRule plist to human-readable string */
+const FREQUENCY_UNIT_MAP: Record<number, string> = {
+  4: "daily",
+  256: "weekly",
+  16: "monthly",
+  2048: "yearly",
+};
+
+/**
+ * Parse the recurrenceRule blob (XML plist) and return a human-readable
+ * frequency string like "daily", "weekly", "monthly", "yearly", or null.
+ * Bun's SQLite returns BLOBs as Uint8Array (or a byte-indexed object).
+ */
+function parseRecurrenceRule(raw: unknown): string | null {
+  if (raw == null) return null;
+
+  let xmlString: string;
+  try {
+    if (raw instanceof Uint8Array || raw instanceof Buffer) {
+      xmlString = new TextDecoder().decode(raw);
+    } else if (typeof raw === "object" && raw !== null) {
+      // Bun SQLite sometimes returns blobs as byte-indexed plain objects
+      const values = Object.values(raw as Record<string, number>);
+      xmlString = new TextDecoder().decode(new Uint8Array(values));
+    } else if (typeof raw === "string") {
+      xmlString = raw;
+    } else {
+      return null;
+    }
+
+    // Extract <key>fu</key><integer>N</integer> from the plist XML
+    const fuMatch = xmlString.match(
+      /<key>fu<\/key>\s*<integer>(\d+)<\/integer>/
+    );
+    if (fuMatch) {
+      const fu = parseInt(fuMatch[1], 10);
+      return FREQUENCY_UNIT_MAP[fu] ?? `every-${fu}`;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function rowToTodo(row: RawTaskRow): Todo {
+  const isRecurring = row.rt1_recurrenceRule != null;
+  const nextInstanceDate = thingsScheduleDateToString(
+    row.rt1_nextInstanceStartDate
+  );
+
+  // For recurring templates, use rt1_nextInstanceStartDate as effective startDate
+  // if the regular startDate is null
+  const effectiveStartDate =
+    row.startDate != null
+      ? thingsScheduleDateToString(row.startDate)
+      : isRecurring
+        ? nextInstanceDate
+        : null;
+
   return {
     uuid: row.uuid,
     title: row.title ?? "",
@@ -185,7 +243,7 @@ function rowToTodo(row: RawTaskRow): Todo {
     status: statusToString(row.status),
     notes: row.notes ?? "",
     start: startToString(row.start, row.startBucket, row.startDate),
-    startDate: thingsScheduleDateToString(row.startDate),
+    startDate: effectiveStartDate,
     deadline: thingsScheduleDateToString(row.deadline),
     createdAt: unixToISO(row.creationDate) ?? "",
     modifiedAt: unixToISO(row.userModificationDate) ?? "",
@@ -197,8 +255,9 @@ function rowToTodo(row: RawTaskRow): Todo {
     tags: getTagsForTask(row.uuid),
     checklist: getChecklistForTask(row.uuid),
     reminderTime: unixToISO(row.reminderTime),
-    repeating: !!row.rt1_recurrenceRule,
-    recurrenceRule: row.rt1_recurrenceRule,
+    repeating: isRecurring,
+    recurrenceRule: parseRecurrenceRule(row.rt1_recurrenceRule),
+    nextInstanceDate,
   };
 }
 
@@ -253,13 +312,15 @@ export function getTodosByList(list: ThingsList): Todo[] {
       break;
 
     case "today": {
-      // Get today's date value in Things epoch for comparing rt1_nextInstanceStartDate
+      // rt1_nextInstanceStartDate uses the same encoding as startDate (Things epoch offset).
+      // Use calibration to compute today's value range in Things encoding.
       const offset = calibrateStartDateEpoch();
-      const todayUnix = Math.floor(Date.now() / 86400000) * 86400;
-      const todayThingsDate = todayUnix - offset;
-      // Things stores dates as day-precision, so we match the whole day
-      const todayStart = Math.floor(todayThingsDate / 86400) * 86400;
-      const todayEnd = todayStart + 86400;
+      const todayMidnightUnix =
+        Math.floor(Date.now() / 86400000) * 86400; // today midnight UTC in seconds
+      const todayThingsValue = todayMidnightUnix - offset;
+      // Be lenient: ±86400 to handle timezone edge cases
+      const todayStart = todayThingsValue - 86400;
+      const todayEnd = todayThingsValue + 86400;
 
       const todayRows = db
         .query<RawTaskRow, []>(
@@ -298,6 +359,12 @@ export function getTodosByList(list: ThingsList): Todo[] {
     }
 
     case "upcoming": {
+      // Compute "today" in Things encoding to filter future items
+      const offset = calibrateStartDateEpoch();
+      const todayMidnightUnix =
+        Math.floor(Date.now() / 86400000) * 86400;
+      const todayThingsValue = todayMidnightUnix - offset;
+
       // Regular future tasks
       const regularRows = db
         .query<RawTaskRow, []>(
@@ -312,18 +379,20 @@ export function getTodosByList(list: ThingsList): Todo[] {
         )
         .all();
 
-      // Recurring templates that are active (not paused)
+      // Recurring templates that are active (not paused) with a future next instance
       const recurringRows = db
-        .query<RawTaskRow, []>(
+        .query<RawTaskRow, [number]>(
           `${BASE_TASK_SELECT}
            WHERE t.type = ${TYPE.TODO}
              AND t.status = ${STATUS.INCOMPLETE}
              AND t.trashed = 0
              AND t.rt1_recurrenceRule IS NOT NULL
              AND t.rt1_instanceCreationPaused = 0
+             AND t.rt1_nextInstanceStartDate IS NOT NULL
+             AND t.rt1_nextInstanceStartDate > ?
            ORDER BY t.rt1_nextInstanceStartDate ASC`
         )
-        .all();
+        .all(todayThingsValue);
 
       // Merge & deduplicate by UUID, sort by effective date
       const seenUuids = new Set<string>();
