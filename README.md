@@ -193,7 +193,7 @@ The `skill/SKILL.md` file is an [OpenClaw](https://openclaw.ai) skill definition
 
 ## Limitations
 
-- **No repeating/recurring todos** — Things 3 doesn't expose recurrence via AppleScript, URL scheme, or Shortcuts. You must create repeating todos in the Things UI.
+- **Repeating/recurring todos** — Read support is available: recurring tasks appear in lists with `repeating: true` and the raw `recurrenceRule`. Creating or modifying repeating tasks is not possible — you must manage recurrence rules in the Things UI.
 - **No native checklist items** — Checklist items are appended to notes as bullet points (AppleScript limitation).
 - **No reminders** — Can read `reminderTime` but can't set reminders.
 - **No headings** — Can't create or manage section headings within projects.

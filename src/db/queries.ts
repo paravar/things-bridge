@@ -172,6 +172,9 @@ interface RawTaskRow {
   area: string | null;
   areaTitle: string | null;
   reminderTime: number | null;
+  rt1_recurrenceRule: string | null;
+  rt1_nextInstanceStartDate: number | null;
+  rt1_instanceCreationPaused: number | null;
 }
 
 function rowToTodo(row: RawTaskRow): Todo {
@@ -194,6 +197,8 @@ function rowToTodo(row: RawTaskRow): Todo {
     tags: getTagsForTask(row.uuid),
     checklist: getChecklistForTask(row.uuid),
     reminderTime: unixToISO(row.reminderTime),
+    repeating: !!row.rt1_recurrenceRule,
+    recurrenceRule: row.rt1_recurrenceRule,
   };
 }
 
@@ -217,7 +222,10 @@ const BASE_TASK_SELECT = `
     p.title AS projectTitle,
     COALESCE(t.area, p.area) AS area,
     a.title AS areaTitle,
-    t.reminderTime
+    t.reminderTime,
+    t.rt1_recurrenceRule,
+    t.rt1_nextInstanceStartDate,
+    t.rt1_instanceCreationPaused
   FROM TMTask t
   LEFT JOIN TMTask p ON t.project = p.uuid
   LEFT JOIN TMArea a ON COALESCE(t.area, p.area) = a.uuid
@@ -244,28 +252,100 @@ export function getTodosByList(list: ThingsList): Todo[] {
       `;
       break;
 
-    case "today":
-      where = `
-        WHERE t.type = ${TYPE.TODO}
-          AND t.status = ${STATUS.INCOMPLETE}
-          AND t.trashed = 0
-          AND t.start = 1
-          AND t.startDate IS NOT NULL
-        ORDER BY t.todayIndex ASC
-      `;
-      break;
+    case "today": {
+      // Get today's date value in Things epoch for comparing rt1_nextInstanceStartDate
+      const offset = calibrateStartDateEpoch();
+      const todayUnix = Math.floor(Date.now() / 86400000) * 86400;
+      const todayThingsDate = todayUnix - offset;
+      // Things stores dates as day-precision, so we match the whole day
+      const todayStart = Math.floor(todayThingsDate / 86400) * 86400;
+      const todayEnd = todayStart + 86400;
 
-    case "upcoming":
-      where = `
-        WHERE t.type = ${TYPE.TODO}
-          AND t.status = ${STATUS.INCOMPLETE}
-          AND t.trashed = 0
-          AND t.start = 1
-          AND t.startDate IS NOT NULL
-          AND t.startBucket = 0
-        ORDER BY t.startDate ASC
-      `;
-      break;
+      const todayRows = db
+        .query<RawTaskRow, []>(
+          `${BASE_TASK_SELECT}
+           WHERE t.type = ${TYPE.TODO}
+             AND t.status = ${STATUS.INCOMPLETE}
+             AND t.trashed = 0
+             AND t.start = 1
+             AND t.startDate IS NOT NULL
+           ORDER BY t.todayIndex ASC`
+        )
+        .all();
+
+      // Also get recurring templates whose next instance is today but haven't spawned yet
+      const recurringTodayRows = db
+        .query<RawTaskRow, [number, number]>(
+          `${BASE_TASK_SELECT}
+           WHERE t.type = ${TYPE.TODO}
+             AND t.status = ${STATUS.INCOMPLETE}
+             AND t.trashed = 0
+             AND t.rt1_recurrenceRule IS NOT NULL
+             AND t.rt1_instanceCreationPaused = 0
+             AND t.rt1_nextInstanceStartDate >= ?
+             AND t.rt1_nextInstanceStartDate < ?
+           ORDER BY t.rt1_nextInstanceStartDate ASC`
+        )
+        .all(todayStart, todayEnd);
+
+      // Deduplicate: exclude recurring templates whose UUID already appears in todayRows
+      const seenUuids = new Set(todayRows.map((r) => r.uuid));
+      const combined = [
+        ...todayRows,
+        ...recurringTodayRows.filter((r) => !seenUuids.has(r.uuid)),
+      ];
+      return combined.map(rowToTodo);
+    }
+
+    case "upcoming": {
+      // Regular future tasks
+      const regularRows = db
+        .query<RawTaskRow, []>(
+          `${BASE_TASK_SELECT}
+           WHERE t.type = ${TYPE.TODO}
+             AND t.status = ${STATUS.INCOMPLETE}
+             AND t.trashed = 0
+             AND t.start = 1
+             AND t.startDate IS NOT NULL
+             AND t.startBucket = 0
+           ORDER BY t.startDate ASC`
+        )
+        .all();
+
+      // Recurring templates that are active (not paused)
+      const recurringRows = db
+        .query<RawTaskRow, []>(
+          `${BASE_TASK_SELECT}
+           WHERE t.type = ${TYPE.TODO}
+             AND t.status = ${STATUS.INCOMPLETE}
+             AND t.trashed = 0
+             AND t.rt1_recurrenceRule IS NOT NULL
+             AND t.rt1_instanceCreationPaused = 0
+           ORDER BY t.rt1_nextInstanceStartDate ASC`
+        )
+        .all();
+
+      // Merge & deduplicate by UUID, sort by effective date
+      const seenUuids = new Set<string>();
+      const allRows: RawTaskRow[] = [];
+      for (const row of [...regularRows, ...recurringRows]) {
+        if (!seenUuids.has(row.uuid)) {
+          seenUuids.add(row.uuid);
+          allRows.push(row);
+        }
+      }
+      // Sort by effective date: use rt1_nextInstanceStartDate for recurring, startDate for regular
+      allRows.sort((a, b) => {
+        const dateA = a.rt1_recurrenceRule
+          ? (a.rt1_nextInstanceStartDate ?? Infinity)
+          : (a.startDate ?? Infinity);
+        const dateB = b.rt1_recurrenceRule
+          ? (b.rt1_nextInstanceStartDate ?? Infinity)
+          : (b.startDate ?? Infinity);
+        return dateA - dateB;
+      });
+      return allRows.map(rowToTodo);
+    }
 
     case "anytime":
       where = `

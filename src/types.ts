@@ -19,6 +19,8 @@ export interface Todo {
   tags: string[];
   checklist: ChecklistItem[];
   reminderTime: string | null;
+  repeating: boolean;
+  recurrenceRule: string | null;
 }
 
 export interface ChecklistItem {
